@@ -1915,6 +1915,7 @@
                   "chain-operators/guides/features/setting-operator-fee",
                   "chain-operators/guides/features/setting-da-footprint",
                   "chain-operators/guides/features/flashblocks-guide",
+                  "chain-operators/guides/features/sequencer-defined-metrics",
                   "chain-operators/guides/features/alt-da-mode-guide",
                   "chain-operators/guides/features/blobs",
                   "chain-operators/guides/features/snap-sync"
