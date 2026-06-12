@@ -3,13 +3,20 @@ title: "SDM: Sequencer Defined Metering"
 description: "Technical guide for chain operators on enabling and operating Sequencer Defined Metering (SDM)."
 ---
 
+<Warning>
+This article describes the upcoming SDM feature that is not yet live.  It is
+scheduled to go live with the **Lagoon** hardfork.
+</Warning>
+
+
 This guide shows chain operators how to enable and operate **Sequencer Defined
 Metering (SDM)**.  SDM lets a block builder issue rebates for the gas that
 transactions normally pay.  These rebates can be based on different policies,
-but on release, OP Mainnet will support the pre-warmed state access policy.  This means that whenever a later transaction in the same block touches state that an earlier transaction already
-touched, it will be issued a refund.
+but on release, OP Mainnet will support the Block-Level Warming policy.
+This means that whenever a later transaction in the same block touches state
+that an earlier transaction already touched, it will be issued a refund.
 
-## Overview of Pre-warmed State Access
+## Overview of Block-Level Warming
 
 Under canonical EVM rules
 ([EIP-2929](https://eips.ethereum.org/EIPS/eip-2929)), i.e. without SDM, every
@@ -66,12 +73,12 @@ is `gasUsed + opGasRefund`.
 
 A builder produces PostExec transactions only when **both** of the following are true:
 
-1. **Protocol gate** — SDM is active at the block's timestamp. SDM is gated by the **Interop**
-   hardfork: it is active for any block whose timestamp is at or after the chain's Interop
+1. **Protocol gate** — SDM is active at the block's timestamp. SDM is gated by the **Lagoon**
+   hardfork: it is active for any block whose timestamp is at or after the chain's **Lagoon**
    activation. This is a consensus rule shared by every node, enforced independently by
-   **op-node** derivation and execution-engine block validation.
+   consensus-layer derivation by clients such as **op-node** and **kona-node** and by execution-engine block validation.
 2. **Operator gate** — the operator has explicitly opted in on the builder via the
-   `admin_setSdmPostExecOptIn` RPC. This lets you control whether *your* sequencer produces
+   `admin_setSdmPostExecOptIn` RPC. This lets you, as a chain operator, control whether *your chain sequencer* produces
    PostExec transactions, even on a chain where the protocol gate is already open.
 
 Verifier nodes supporting SDM do **not** need to do anything to opt in. They accept and re-derive PostExec transactions purely by the protocol consensus rule.
@@ -86,9 +93,9 @@ Verifier nodes supporting SDM do **not** need to do anything to opt in. They acc
 
 SDM requires:
 
-* A chain with the **Interop** hardfork scheduled or already active. Without it the protocol
+* A chain with the **Lagoon** hardfork scheduled or already active. Without it the protocol
   gate never opens and no PostExec transactions are produced regardless of the operator gate.
-* Builds of **op-reth** (execution client) and **op-node** (consensus client) that support SDM. SDM was introduced in [PR #20738](https://github.com/ethereum-optimism/optimism/pull/20738) and ships in the releases that follow **op-reth `v2.3.0`** and **op-node `v1.19.0`**.
+* Builds of **op-reth** (execution client) and **op-node** or **kona-node** (consensus client) that support SDM.
 * **op-rbuilder**, if you run Flashblocks.
 
 To check your client version, run
@@ -135,7 +142,7 @@ The change takes effect on the next block the component builds. Pass `false` to 
 
 Query `admin_sdmStatus` on each component. With no parameter it evaluates the protocol gate
 against the current wall-clock time; pass a Unix timestamp to check a specific time (for
-example, to confirm what will happen after a scheduled Interop activation):
+example, to confirm what will happen after a scheduled  **Lagoon** activation):
 
 ```bash title="Check SDM status"
 curl -X POST <ADMIN_RPC_URL> \
@@ -161,9 +168,9 @@ The response reports both gates and their `AND` as the field `effective`:
 | Field            | Meaning                                                                              |
 | :--------------- | :----------------------------------------------------------------------------------- |
 | `postExecOptIn`  | Whether the operator gate is open (you called `admin_setSdmPostExecOptIn(true)`).     |
-| `protocolActive` | Whether SDM is active at the queried timestamp per the chain's Interop activation.    |
+| `protocolActive` | Whether SDM is active at the queried timestamp per the chain's **Lagoon** activation.    |
 | `effective`      | `postExecOptIn && protocolActive` — whether PostExec transactions will be produced.   |
-| `activationTime` | Interop activation timestamp, if scheduled; omitted when already active or unset.     |
+| `activationTime` | **Lagoon** activation timestamp, if scheduled; omitted when already active or unset.     |
 
 SDM is live once `effective` is `true` on every block-building component.
 
