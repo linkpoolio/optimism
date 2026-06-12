@@ -27,17 +27,18 @@ same transaction* are
 next transaction in the block pays the cold cost all over again — even when it touches
 exactly the same accounts and slots.
 
-SDM extends warming to **block scope**. Once any transaction in a block has accessed an
-account or storage slot, every later transaction in that same block is rebated the
-difference between the cold and warm cost when it accesses the same account or slot. This
-makes blocks that repeatedly touch shared state — popular contracts, shared routers,
-oracles, token contracts — cheaper to execute, and lets the sequencer pass those savings on
-to users.
+The Block-Level Warming SDM policy extends warming to **block scope**. Once any
+transaction in a block has accessed an account or storage slot, every later
+transaction in that same block is rebated the difference between the cold and
+warm cost when it accesses the same account or slot. This makes blocks that
+repeatedly touch shared state — popular contracts, shared routers, oracles,
+token contracts — cheaper to execute, and lets the sequencer pass those savings
+on to users.
 
-The rebates are computed deterministically by the execution engine and recorded
-in a special **PostExec transaction** appended to every SDM-active block where
-the sequencer issues rebates. Verifiers re-derive the same rebates from the
-same block and verify them against the PostExec transaction. SDM is therefore a
+The rebates are decided by the execution engine and recorded in a special
+**PostExec transaction** appended to every SDM-active block where the sequencer
+issues rebates. Verifiers re-derive the transactions and verify their
+discounted gas fees against the PostExec transaction. SDM is therefore a
 consensus-level feature, not a local pricing policy.
 
 In the future, the **PostExec** transaction can be used to encode different rebate policies.
@@ -84,9 +85,12 @@ A builder produces PostExec transactions only when **both** of the following are
 Verifier nodes supporting SDM do **not** need to do anything to opt in. They accept and re-derive PostExec transactions purely by the protocol consensus rule.
 
 <Info>
-  The operator gate is **in-memory** on **op-reth** and **op-rbuilder** and starts **disabled on
-  every process boot**. You must re-issue `admin_setSdmPostExecOptIn` after each restart of
-  those processes. **op-node** persists its opt-in across restarts.
+  The operator gate on **op-reth** and **op-rbuilder** is **disabled** by default.
+To persist it, the chain operator can choose between either exporting the
+environment variable `OP_SDM_POLICY=BlockLevelWarming` or passing the CLI switch
+`--sdm-policy=BlockLevelWarming`.
+Alternatively, you can re-issue `admin_setSdmPostExecOptIn` after each restart of those
+processes.
 </Info>
 
 ## Before you begin
