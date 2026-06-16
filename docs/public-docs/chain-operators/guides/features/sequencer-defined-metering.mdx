@@ -89,8 +89,7 @@ Verifier nodes supporting SDM do **not** need to do anything to opt in. They acc
 To persist it, the chain operator can choose between either exporting the
 environment variable `OP_SDM_POLICY=BlockLevelWarming` or passing the CLI switch
 `--sdm-policy=BlockLevelWarming`.
-Alternatively, you can re-issue `admin_setSdmPostExecOptIn` after each restart of those
-processes.
+Alternatively, you can re-issue `admin_setSdmPostExecOptIn` through the RPC interface after each restart of those processes.
 </Info>
 
 ## Before you begin
@@ -102,7 +101,7 @@ SDM requires:
 * Builds of **op-reth** (execution client) and **op-node** or **kona-node** (consensus client) that support SDM.
 * **op-rbuilder**, if you run Flashblocks.
 
-To check your client version, run
+To check your client version, use the `--version` switch.  E.g.
 
 ```bash
 op-reth --version
@@ -111,42 +110,58 @@ op-reth --version
 The most reliable check is capability detection: if the `admin_sdmStatus` RPC method (below)
 is missing, your build predates SDM and you need to upgrade.
 
-## Enabling SDM
+## Enabling SDM for Chain Operators
 
 ### Operators running verifier nodes
-Operators running verifier nodes need to take no action besides making sure that they are running a version that supports SDM.
+Operators running verifier nodes need to take no action besides making sure that they are running an up-to-date version that supports SDM.
 
 ### Operators running sequencer nodes
-Opt in on **every** block-building component you run. Each component tracks its own gate:
+Opt in on **every** block-building component you run. The components are
 
 * **op-node** (the sequencer's consensus client)
 * **op-reth** (the sequencer's execution client and payload builder)
-* **op-rbuilder** (only if you run [Flashblocks](/chain-operators/guides/features/flashblocks-guide))
+* **op-rbuilder** and **rollup-boost** (only if you run [Flashblocks](/chain-operators/guides/features/flashblocks-guide))
 
-#### Opt in via the admin RPC
+Each component tracks its own gate that must be enabled individually.
 
-Call `admin_setSdmPostExecOptIn` with `true` on each component's admin RPC endpoint:
+In the following sections we show three methods for how this can be achieved. 
+
+##### Method 1:  Setting the Environment Variable
+
+Set the environment variable `OP_SDM_POLICY` to the desired SDM policy in your shell.  All three components are aware and will detect this environment variable.
+```bash
+export OP_SDM_POLICY=BlockLevelWarming
+./op-reth # op-reth will read the value from OP_SDM_POLICY
+```
+
+Note that this variable is active until you override it or until you run `unset OP_SDM_POLICY` to unset it.
+
+##### Method 2:  Passing the CLI option
+
+Each of the three components also reads the switch  `--sdm-policy` on launch, .e.g.
+```bash
+./op-node --sdm_policy=BlockLevelWarming
+```
+Note you must add this option to all the components individually.
+
+The CLI option takes precedence over the environment variable when both are set.
+
+##### Method 3:  Opt in via the admin RPC interface
+
+If the component is already running, you can call the RPC method `admin_setSdmPolicy` with the argument `BlockLevelWarming` on each component's RPC endpoint, e.g.
 
 ```bash title="Enable SDM on a component"
 curl -X POST <ADMIN_RPC_URL> \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"admin_setSdmPostExecOptIn","params":[true],"id":1}'
+  -d '{"jsonrpc":"2.0","method":"admin_setSdmPolicy","params":["BlockLevelWarming"],"id":1}'
 ```
+Note, that you must enable, and you must have access to, the `admin` namespace.  If you are not sure whether this is enabled, you can check this with the `rpc_modules` method.
 
-The change takes effect on the next block the component builds. Pass `false` to opt back out.
-
-<Warning>
-  Because the **op-reth** and **op-rbuilder** opt-in is not persisted, fold the
-  `admin_setSdmPostExecOptIn` call into your startup automation (for example, a post-start
-  hook or your process supervisor) so SDM is re-enabled after every restart and after a
-  Flashblocks leader failover.
-</Warning>
+The change takes effect on the next block the component builds. Pass `"params": []` to opt back out.
 
 #### Verify the configuration
 
-Query `admin_sdmStatus` on each component. With no parameter it evaluates the protocol gate
-against the current wall-clock time; pass a Unix timestamp to check a specific time (for
-example, to confirm what will happen after a scheduled  **Lagoon** activation):
+You can verify the current configuration for each component with the method `admin_sdmStatus` with no parameter e.g.
 
 ```bash title="Check SDM status"
 curl -X POST <ADMIN_RPC_URL> \
@@ -154,7 +169,7 @@ curl -X POST <ADMIN_RPC_URL> \
   -d '{"jsonrpc":"2.0","method":"admin_sdmStatus","params":[],"id":1}'
 ```
 
-The response reports both gates and their `AND` as the field `effective`:
+The response reports the `effective` value, which defines if SDM is currently active.  It is the logical `AND` of the two gates: the protocol gate, `protocolActive`, set by the **Lagoon** hardfork and the chain operator gate, `postExecOptIn`, set by you, e.g.:
 
 ```json
 {
@@ -169,34 +184,30 @@ The response reports both gates and their `AND` as the field `effective`:
 }
 ```
 
-| Field            | Meaning                                                                              |
-| :--------------- | :----------------------------------------------------------------------------------- |
-| `postExecOptIn`  | Whether the operator gate is open (you called `admin_setSdmPostExecOptIn(true)`).     |
-| `protocolActive` | Whether SDM is active at the queried timestamp per the chain's **Lagoon** activation.    |
-| `effective`      | `postExecOptIn && protocolActive` — whether PostExec transactions will be produced.   |
-| `activationTime` | **Lagoon** activation timestamp, if scheduled; omitted when already active or unset.     |
+| Field            | Meaning                                                                                       |
+| :--------------- | :-------------------------------------------------------------------------------------------- |
+| `postExecOptIn`  | Whether the operator gate is open, see previous sections.                                     |
+| `protocolActive` | Whether SDM is active at the current timestamp w.r.t. the chain's **Lagoon** activation time. |
+| `effective`      | `postExecOptIn && protocolActive` — whether SDM-enabled transactions will be produced.        |
+| `activationTime` | **Lagoon** activation timestamp, if scheduled; omitted when already active or unset.          |
 
-SDM is live once `effective` is `true` on every block-building component.
+SDM is live once `effective` is `true` on all your components.
 
-#### Confirm rebates in produced blocks
+#### Confirm SDM-based rebates in produced blocks
 
-After enabling SDM, fetch a transaction receipt and check for the `opGasRefund` field, which
-is present only when the block contains a PostExec transaction:
+After you have confirmed that SDM is live on all your block-building components, you can verify that your sequencer is issuing gas refunds.  To do this, you can fetch a transaction receipt and check for the `opGasRefund` field, which is present only when the block contains a PostExec transaction:
 
 ```bash title="Inspect a receipt"
 cast receipt <TX_HASH> --rpc-url <RPC_URL> --json | jq '.opGasRefund'
 ```
 
-You can also confirm that the last transaction in a recent block is the PostExec transaction (type `0x7D`).  Keep in mind that this transaction is present if, and only if, rebates were issued in the block.
+You can also confirm that the last transaction in a recent block is the PostExec transaction (type `0x7D`).  Keep in mind that this transaction is present if, and only if, rebates were issued in the block.  That is, its absence does not tell you whether SDM is active or not.
 
-## Flashblocks considerations
+## Flashblocks
 
-If you run [Flashblocks](/chain-operators/guides/features/flashblocks-guide), **op-rbuilder**
-publishes the PostExec transaction in a dedicated flashblock field rather than alongside the
-regular transactions, and `rollup-boost` materializes it into the final sealed block. You
-still need to opt **op-rbuilder** in via `admin_setSdmPostExecOptIn`, and — because the flag is
-in-memory and only the leader builds blocks — re-issue it on each instance after restarts and
-leader changes.
+If you produce and publish [Flashblocks](/chain-operators/guides/features/flashblocks-guide) using **op-rbuilder**, you should be aware that it
+publishes the PostExec transaction in a dedicated **Flashblock** field rather than alongside the
+regular transactions.  Then your **rollup-boost** instance materializes it into the final sealed block. You still need to opt **op-rbuilder** in via one of the three methods above, while any SDM aware version of **rollup-boost** detects and assembles the final PostExec automatically.
 
 ## References
 
