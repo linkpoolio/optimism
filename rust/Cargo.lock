@@ -6354,6 +6354,7 @@ dependencies = [
  "brotli",
  "derive_more",
  "kona-genesis",
+ "kona-hardforks",
  "kona-registry",
  "miniz_oxide 0.9.1",
  "op-alloy-consensus",

@@ -5,6 +5,7 @@ use alloy_consensus::{Transaction, Typed2718};
 use alloy_primitives::{B256, U256};
 use alloy_rlp::{Buf, Header};
 use kona_genesis::{RollupConfig, SystemConfig};
+use kona_hardforks::{Hardfork, Hardforks};
 use op_alloy_consensus::{OpBlock, OpTxType, decode_holocene_extra_data, decode_jovian_extra_data};
 
 use crate::{
@@ -58,6 +59,22 @@ pub fn to_system_config(
         gas_limit: block.header.gas_limit,
         ..Default::default()
     };
+
+    // The Karst activation block's header gas limit carries the one-time NUT-bundle upgrade
+    // gas on top of the system config gas limit (so the upgrade transactions exceed the normal
+    // budget). strips_karst_upgrade_gas subtracts it back out at the block right after the
+    // activation block, unless the chain opts out via keep_karst_upgrade_gas. This runs during
+    // reconstruction, before update_with_receipts in the caller, so a setGasLimit in the same
+    // block's L1 origin takes precedence. Mirrors op-node's PayloadToSystemConfig.
+    if rollup_config.strips_karst_upgrade_gas(block.header.timestamp) {
+        let upgrade_gas = Hardforks::KARST.upgrade_gas();
+        cfg.gas_limit = cfg.gas_limit.checked_sub(upgrade_gas).ok_or(
+            OpBlockConversionError::GasLimitBelowUpgradeGas {
+                gas_limit: cfg.gas_limit,
+                upgrade_gas,
+            },
+        )?;
+    }
 
     // After holocene's activation, the EIP-1559 parameters are stored in the block header's nonce.
     if rollup_config.is_jovian_active(block.header.timestamp) {
@@ -291,6 +308,89 @@ mod tests {
             da_footprint_gas_scalar: None,
         };
         assert_eq!(config, expected);
+    }
+
+    #[test]
+    fn test_to_system_config_strips_karst_upgrade_gas() {
+        const BASE_GAS_LIMIT: u64 = 30_000_000;
+        let karst_gas = Hardforks::KARST.upgrade_gas();
+        let karst_time = 100u64;
+        let block = OpBlock {
+            header: alloy_consensus::Header {
+                number: 1,
+                timestamp: karst_time,
+                // The activation block carries base + the one-time upgrade gas.
+                gas_limit: BASE_GAS_LIMIT + karst_gas,
+                // Jovian extra data: version 0x01 + denominator + elasticity + minBaseFee
+                // (Karst is active, which implies Jovian).
+                extra_data: bytes!("010000beef0000babe0000000000000000"),
+                ..Default::default()
+            },
+            body: alloy_consensus::BlockBody {
+                transactions: vec![op_alloy_consensus::OpTxEnvelope::Deposit(
+                    alloy_primitives::Sealed::new(op_alloy_consensus::TxDeposit {
+                        input: alloy_primitives::Bytes::from(&RAW_ISTHMUS_INFO_TX),
+                        ..Default::default()
+                    }),
+                )],
+                ..Default::default()
+            },
+        };
+        let block_hash = block.header.hash_slow();
+        let rollup_config = RollupConfig {
+            block_time: 2,
+            genesis: ChainGenesis {
+                l2: BlockNumHash { hash: block_hash, ..Default::default() },
+                ..Default::default()
+            },
+            hardforks: HardForkConfig { karst_time: Some(karst_time), ..Default::default() },
+            ..Default::default()
+        };
+        assert!(rollup_config.is_first_karst_block(block.header.timestamp));
+        let config = to_system_config(&block, &rollup_config).unwrap();
+        assert_eq!(config.gas_limit, BASE_GAS_LIMIT, "Karst upgrade gas must be stripped");
+    }
+
+    #[test]
+    fn test_to_system_config_keeps_karst_upgrade_gas() {
+        const BASE_GAS_LIMIT: u64 = 30_000_000;
+        let karst_gas = Hardforks::KARST.upgrade_gas();
+        let block = OpBlock {
+            header: alloy_consensus::Header {
+                number: 1,
+                timestamp: 100,
+                gas_limit: BASE_GAS_LIMIT + karst_gas,
+                extra_data: bytes!("010000beef0000babe0000000000000000"),
+                ..Default::default()
+            },
+            body: alloy_consensus::BlockBody {
+                transactions: vec![op_alloy_consensus::OpTxEnvelope::Deposit(
+                    alloy_primitives::Sealed::new(op_alloy_consensus::TxDeposit {
+                        input: alloy_primitives::Bytes::from(&RAW_ISTHMUS_INFO_TX),
+                        ..Default::default()
+                    }),
+                )],
+                ..Default::default()
+            },
+        };
+        // keep_karst_upgrade_gas = true: the activation block's inflated gas limit is kept,
+        // so an already-affected chain's history still validates.
+        let rollup_config = RollupConfig {
+            block_time: 2,
+            hardforks: HardForkConfig {
+                karst_time: Some(100),
+                keep_karst_upgrade_gas: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(rollup_config.is_first_karst_block(block.header.timestamp));
+        let config = to_system_config(&block, &rollup_config).unwrap();
+        assert_eq!(
+            config.gas_limit,
+            BASE_GAS_LIMIT + karst_gas,
+            "upgrade gas must be kept when keep_karst_upgrade_gas is set"
+        );
     }
 
     #[test]

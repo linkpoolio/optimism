@@ -332,6 +332,21 @@ impl RollupConfig {
             !self.is_karst_active(timestamp.saturating_sub(self.block_time))
     }
 
+    /// Returns whether the one-time Karst upgrade gas must be stripped from the system
+    /// config reconstructed from a block with the given timestamp.
+    ///
+    /// The Karst activation block adds upgrade gas on top of the system config gas limit;
+    /// stripping it again at the block right after the activation block reverts the limit.
+    /// Chains that already activated Karst with the leak baked into their history opt out via
+    /// `hardforks.keep_karst_upgrade_gas` and clear it themselves with a `setGasLimit`.
+    ///
+    /// This is applied during system-config reconstruction (`to_system_config`), i.e. before
+    /// `update_with_receipts` in `prepare_payload_attributes`, so a `setGasLimit` in the same
+    /// block's L1 origin overrides it (the L1 update takes precedence).
+    pub fn strips_karst_upgrade_gas(&self, block_timestamp: u64) -> bool {
+        !self.hardforks.keep_karst_upgrade_gas && self.is_first_karst_block(block_timestamp)
+    }
+
     /// Returns true if Lagoon is active at the given timestamp.
     pub fn is_lagoon_active(&self, timestamp: u64) -> bool {
         self.hardforks.lagoon_time.is_some_and(|t| timestamp >= t)
@@ -833,6 +848,7 @@ mod tests {
                 isthmus_time: Some(90),
                 jovian_time: Some(100),
                 karst_time: Some(110),
+                keep_karst_upgrade_gas: false,
                 lagoon_time: Some(120),
             },
             block_time: 2,
@@ -898,6 +914,35 @@ mod tests {
         assert!(!cfg.is_first_lagoon_block(118));
         assert!(cfg.is_first_lagoon_block(120));
         assert!(!cfg.is_first_lagoon_block(122));
+    }
+
+    #[test]
+    fn test_strips_karst_upgrade_gas() {
+        // Default (keep_karst_upgrade_gas = false): strip at the activation block so the
+        // block right after it reverts.
+        let fixed = RollupConfig {
+            block_time: 2,
+            hardforks: HardForkConfig { karst_time: Some(110), ..Default::default() },
+            ..Default::default()
+        };
+        assert!(!fixed.strips_karst_upgrade_gas(108)); // pre-activation
+        assert!(fixed.strips_karst_upgrade_gas(110)); // activation block -> next reverts
+        assert!(!fixed.strips_karst_upgrade_gas(112)); // already reverted
+
+        // keep_karst_upgrade_gas = true: never strip; the inflated gas limit is preserved
+        // (the operator clears it with a setGasLimit when they choose).
+        let kept = RollupConfig {
+            block_time: 2,
+            hardforks: HardForkConfig {
+                karst_time: Some(110),
+                keep_karst_upgrade_gas: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!kept.strips_karst_upgrade_gas(108));
+        assert!(!kept.strips_karst_upgrade_gas(110)); // activation block, but opted out
+        assert!(!kept.strips_karst_upgrade_gas(112));
     }
 
     #[test]

@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/types"
 
+	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
@@ -89,6 +90,23 @@ func PayloadToSystemConfig(rollupCfg *rollup.Config, payload *eth.ExecutionPaylo
 		Overhead:    info.L1FeeOverhead,
 		Scalar:      info.L1FeeScalar,
 		GasLimit:    uint64(payload.GasLimit),
+	}
+
+	// Starting with Karst, the activation block's gas limit carries one-time upgrade gas on
+	// top of the system config gas limit so the NUT-bundle upgrade transactions don't have to
+	// fit within it (see PreparePayloadAttributes). StripsKarstUpgradeGas subtracts it back out
+	// at the block right after the activation block, unless KeepKarstUpgradeGas opts out. This
+	// runs before UpdateSystemConfigWithL1Receipts in PreparePayloadAttributes, so a setGasLimit
+	// in the same block's L1 origin takes precedence.
+	if rollupCfg.StripsKarstUpgradeGas(uint64(payload.Timestamp)) {
+		karstGas, err := UpgradeGas(forks.Karst)
+		if err != nil {
+			return eth.SystemConfig{}, fmt.Errorf("failed to read karst upgrade gas: %w", err)
+		}
+		if r.GasLimit < karstGas {
+			return eth.SystemConfig{}, fmt.Errorf("karst activation block gas limit %d below upgrade gas %d", r.GasLimit, karstGas)
+		}
+		r.GasLimit -= karstGas
 	}
 	err = eip1559.ValidateOptimismExtraData(rollupCfg, uint64(payload.Timestamp), payload.ExtraData)
 	if err != nil {

@@ -23,6 +23,19 @@ func (c *Config) IsL2CMActivationBlock(l2BlockTime uint64) bool {
 	return c.IsKarstActivationBlock(l2BlockTime)
 }
 
+// StripsKarstUpgradeGas reports whether the one-time Karst upgrade gas must be stripped
+// from the system config reconstructed from a block with the given timestamp. By default it
+// is subtracted at the block right after the Karst activation block, reverting the gas limit;
+// chains that already activated Karst with the leak baked in set KeepKarstUpgradeGas to opt
+// out (and clear it themselves with a setGasLimit).
+//
+// This is applied during reconstruction (PayloadToSystemConfig), before
+// UpdateSystemConfigWithL1Receipts in PreparePayloadAttributes, so a setGasLimit in the same
+// block's L1 origin overrides it (the L1 update takes precedence).
+func (c *Config) StripsKarstUpgradeGas(l2BlockTime uint64) bool {
+	return !c.KeepKarstUpgradeGas && c.IsL2CMActivationBlock(l2BlockTime)
+}
+
 // IsSDM gates Sequencer-Defined Metering: when false, batches carrying PostExec
 // transactions are rejected during derivation. Defers to the hardfork where SDM is activated.
 func (c *Config) IsSDM(time uint64) bool {
