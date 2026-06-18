@@ -1,0 +1,91 @@
+name: build-op-reth
+
+# Builds the linkpool-patched op-reth (deposit-nonce receipts-root fix for the
+# Regolith->Canyon window) and pushes it to GHCR. Triggered on pushes to the
+# fix branch, or manually via workflow_dispatch.
+
+on:
+  push:
+    branches:
+      - fix/op-receipt-root-regolith-nonce-strip
+    paths:
+      - 'rust/**'
+      - '.github/workflows/build-op-reth.yml'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to publish'
+        required: false
+        default: 'v2.3.1-linkpool.1'
+      build_profile:
+        description: 'Cargo build profile (release = thin LTO, runner-safe)'
+        required: false
+        default: 'release'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: linkpoolio/op-reth
+  FEATURES: jemalloc asm-keccak min-debug-logs
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # reth builds are large; reclaim disk and add swap so the linker doesn't OOM.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Add swap
+        run: |
+          sudo fallocate -l 12G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tags
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.image_tag || 'v2.3.1-linkpool.1' }}"
+          SHA_TAG="sha-${GITHUB_SHA::12}"
+          echo "tags=${REGISTRY}/${IMAGE_NAME}:${TAG},${REGISTRY}/${IMAGE_NAME}:${SHA_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push op-reth
+        uses: docker/build-push-action@v6
+        with:
+          context: rust
+          file: rust/op-reth/DockerfileOp
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            BUILD_PROFILE=${{ github.event.inputs.build_profile || 'release' }}
+            FEATURES=jemalloc asm-keccak min-debug-logs
+          provenance: false
+          # Cache layers across runs to speed up iteration.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
