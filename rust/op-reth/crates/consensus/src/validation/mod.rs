@@ -115,7 +115,18 @@ pub fn validate_block_post_execution<R: DepositReceipt>(
     // transaction This was replaced with is_success flag.
     // See more about EIP here: https://eips.ethereum.org/EIPS/eip-658
     if chain_spec.is_byzantium_active_at_block(header.number()) {
-        let result = if let Some((receipts_root, logs_bloom)) = receipt_root_bloom {
+        // The pre-computed `receipt_root_bloom` is produced by reth-core's fork-unaware streaming
+        // receipt-root task, which encodes deposit receipts via `encode_2718` *including* the
+        // deposit nonce. In the Regolith->Canyon window, op-geth/op-erigon omit the deposit nonce
+        // from the receipts root (see op-geth#144 and `calculate_receipt_root_optimism`), so the
+        // pre-computed root diverges from the canonical header root. In that window we must ignore
+        // the pre-computed value and recompute via the fork-aware path that strips the nonce.
+        let in_regolith_pre_canyon = chain_spec
+            .is_regolith_active_at_timestamp(header.timestamp()) &&
+            !chain_spec.is_canyon_active_at_timestamp(header.timestamp());
+        let result = if let Some((receipts_root, logs_bloom)) =
+            receipt_root_bloom.filter(|_| !in_regolith_pre_canyon)
+        {
             compare_receipts_root_and_logs_bloom(
                 receipts_root,
                 logs_bloom,
